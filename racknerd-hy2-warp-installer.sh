@@ -7,6 +7,7 @@ set -Eeuo pipefail
 umask 077
 
 HYSTERIA_VERSION="${HYSTERIA_VERSION:-v2.10.0}"
+INSTALLER_VERSION="1.1.0"
 HY2_PORT_START="${HY2_PORT_START:-40000}"
 HY2_PORT_END="${HY2_PORT_END:-42000}"
 WARP_PROXY_PORT="${WARP_PROXY_PORT:-41080}"
@@ -20,6 +21,7 @@ CONFIG_FILE=/etc/hysteria/config.yaml
 SERVICE_FILE=/etc/systemd/system/hysteria-server.service
 SYSCTL_FILE=/etc/sysctl.d/99-hysteria-udp.conf
 LINKS_FILE=/root/hy2-client-links.txt
+CLIENT_CONFIG_FILE=/root/hy2-client-config.yaml
 BACKUP_ROOT=/root/hy2-warp-backups
 
 log() { printf '\n\033[1;32m[+] %s\033[0m\n' "$*"; }
@@ -48,6 +50,7 @@ backup_current() {
   [[ -f "$SERVICE_FILE" ]] && cp -a "$SERVICE_FILE" "$BACKUP_DIR/hysteria-server.service"
   [[ -f "$SYSCTL_FILE" ]] && cp -a "$SYSCTL_FILE" "$BACKUP_DIR/99-hysteria-udp.conf"
   [[ -f "$LINKS_FILE" ]] && cp -a "$LINKS_FILE" "$BACKUP_DIR/hy2-client-links.txt"
+  [[ -f "$CLIENT_CONFIG_FILE" ]] && cp -a "$CLIENT_CONFIG_FILE" "$BACKUP_DIR/hy2-client-config.yaml"
   printf '%s\n' "$BACKUP_DIR"
 }
 
@@ -294,33 +297,58 @@ url_encode() {
 }
 
 write_client_links() {
-  local ipv4 ipv6 encoded_password host4 host6
+  local ipv4 ipv6 encoded_password host4 host6 cert_pin
   ipv4="$(curl -4fsS --max-time 10 https://api.ipify.org || true)"
   ipv6="$(curl -6fsS --max-time 5 https://api64.ipify.org || true)"
   encoded_password="$(url_encode "$HY2_PASSWORD")"
+  cert_pin="$(openssl x509 -in "$CONFIG_DIR/server.crt" -noout -fingerprint -sha256 \
+    | sed 's/^.*=//; s/://g' | tr '[:upper:]' '[:lower:]')"
+  [[ "$cert_pin" =~ ^[0-9a-f]{64}$ ]] || die "无法生成有效的 TLS 证书 SHA-256 指纹。"
   host4="$ipv4"
   [[ -n "$host4" ]] || host4="你的服务器IPv4"
 
   {
-    printf '# 兼容链接（PassWall2/旧客户端优先使用）\n'
-    printf 'hysteria2://%s@%s:%s/?insecure=1&sni=%s#HY2-Compatible\n\n' "$encoded_password" "$host4" "$HY2_PORT_START" "$HY2_SNI"
-    printf '# 端口跳跃链接（支持端口范围的客户端使用）\n'
-    printf 'hysteria2://%s@%s:%s-%s/?insecure=1&sni=%s#HY2-Port-Hopping\n' "$encoded_password" "$host4" "$HY2_PORT_START" "$HY2_PORT_END" "$HY2_SNI"
+    printf '# 推荐：单端口 + 证书指纹（PassWall2 优先测试）\n'
+    printf 'hysteria2://%s@%s:%s/?insecure=1&pinSHA256=%s&sni=%s#HY2-Secure-Compatible\n\n' "$encoded_password" "$host4" "$HY2_PORT_START" "$cert_pin" "$HY2_SNI"
+    printf '# 推荐：Hysteria2 官方端口跳跃格式\n'
+    printf 'hysteria2://%s@%s:%s-%s/?insecure=1&pinSHA256=%s&sni=%s#HY2-Official-Port-Hopping\n\n' "$encoded_password" "$host4" "$HY2_PORT_START" "$HY2_PORT_END" "$cert_pin" "$HY2_SNI"
+    printf '# 第三方兼容：部分 PassWall2/Clash 使用 mport 参数（不是 Hysteria2 官方 URI 参数）\n'
+    printf 'hysteria2://%s@%s:%s/?insecure=1&pinSHA256=%s&sni=%s&mport=%s-%s#HY2-MPort-Compatible\n\n' "$encoded_password" "$host4" "$HY2_PORT_START" "$cert_pin" "$HY2_SNI" "$HY2_PORT_START" "$HY2_PORT_END"
+    printf '# 旧客户端兜底：不支持 pinSHA256 时才使用，抗中间人攻击能力较弱\n'
+    printf 'hysteria2://%s@%s:%s/?insecure=1&sni=%s#HY2-Legacy-Compatible\n' "$encoded_password" "$host4" "$HY2_PORT_START" "$HY2_SNI"
     if [[ -n "$ipv6" ]]; then
       host6="[$ipv6]"
-      printf '\n# IPv6 兼容链接\n'
-      printf 'hysteria2://%s@%s:%s/?insecure=1&sni=%s#HY2-IPv6\n' "$encoded_password" "$host6" "$HY2_PORT_START" "$HY2_SNI"
+      printf '\n# IPv6 单端口 + 证书指纹\n'
+      printf 'hysteria2://%s@%s:%s/?insecure=1&pinSHA256=%s&sni=%s#HY2-IPv6-Secure\n' "$encoded_password" "$host6" "$HY2_PORT_START" "$cert_pin" "$HY2_SNI"
     fi
   } > "$LINKS_FILE"
   chmod 0600 "$LINKS_FILE"
+
+  cat > "$CLIENT_CONFIG_FILE" <<EOF
+# Hysteria2 官方客户端配置；包含节点密码，请勿公开。
+server: ${host4}:${HY2_PORT_START}-${HY2_PORT_END}
+auth: "${HY2_PASSWORD}"
+tls:
+  sni: ${HY2_SNI}
+  insecure: true
+  pinSHA256: ${cert_pin}
+transport:
+  type: udp
+  udp:
+    minHopInterval: 15s
+    maxHopInterval: 45s
+EOF
+  chmod 0600 "$CLIENT_CONFIG_FILE"
 }
 
 print_result() {
   log "安装完成"
+  printf 'Installer:  v%s\n' "$INSTALLER_VERSION"
   printf 'Hysteria: %s\n' "$(/usr/local/bin/hysteria version 2>/dev/null | head -n 1 || true)"
   printf 'WARP:      %s\n' "$(warp status 2>/dev/null | tr '\n' ' ' || true)"
   printf '备份目录:  %s\n' "$BACKUP_DIR"
   printf '节点文件:  %s（权限 600，请勿公开）\n\n' "$LINKS_FILE"
+  printf '官方配置:  %s（权限 600，请勿公开）\n\n' "$CLIENT_CONFIG_FILE"
   cat "$LINKS_FILE"
   printf '\n安全提醒：不要把上面的节点链接、密码或订阅地址公开转发。\n'
 }
@@ -343,4 +371,3 @@ main() {
 }
 
 main "$@"
-
