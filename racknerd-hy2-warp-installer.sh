@@ -7,7 +7,7 @@ set -Eeuo pipefail
 umask 077
 
 HYSTERIA_VERSION="${HYSTERIA_VERSION:-v2.10.0}"
-INSTALLER_VERSION="1.1.0"
+INSTALLER_VERSION="1.1.1"
 HY2_PORT_START="${HY2_PORT_START:-40000}"
 HY2_PORT_END="${HY2_PORT_END:-42000}"
 WARP_PROXY_PORT="${WARP_PROXY_PORT:-41080}"
@@ -309,13 +309,13 @@ write_client_links() {
 
   {
     printf '# 推荐：单端口 + 证书指纹（PassWall2 优先测试）\n'
-    printf 'hysteria2://%s@%s:%s/?insecure=1&pinSHA256=%s&sni=%s#HY2-Secure-Compatible\n\n' "$encoded_password" "$host4" "$HY2_PORT_START" "$cert_pin" "$HY2_SNI"
+    printf 'hysteria2://%s@%s:%s/?insecure=1&pinSHA256=%s&sni=%s#RN-CHI-HY2-Single-Port-Pinned\n\n' "$encoded_password" "$host4" "$HY2_PORT_START" "$cert_pin" "$HY2_SNI"
     printf '# 推荐：Hysteria2 官方端口跳跃格式\n'
-    printf 'hysteria2://%s@%s:%s-%s/?insecure=1&pinSHA256=%s&sni=%s#HY2-Official-Port-Hopping\n\n' "$encoded_password" "$host4" "$HY2_PORT_START" "$HY2_PORT_END" "$cert_pin" "$HY2_SNI"
+    printf 'hysteria2://%s@%s:%s-%s/?insecure=1&pinSHA256=%s&sni=%s#RN-CHI-HY2-Official-Port-Hop\n\n' "$encoded_password" "$host4" "$HY2_PORT_START" "$HY2_PORT_END" "$cert_pin" "$HY2_SNI"
     printf '# 第三方兼容：部分 PassWall2/Clash 使用 mport 参数（不是 Hysteria2 官方 URI 参数）\n'
-    printf 'hysteria2://%s@%s:%s/?insecure=1&pinSHA256=%s&sni=%s&mport=%s-%s#HY2-MPort-Compatible\n\n' "$encoded_password" "$host4" "$HY2_PORT_START" "$cert_pin" "$HY2_SNI" "$HY2_PORT_START" "$HY2_PORT_END"
+    printf 'hysteria2://%s@%s:%s/?insecure=1&pinSHA256=%s&sni=%s&mport=%s-%s#RN-CHI-HY2-PassWall2-MPort-Hop\n\n' "$encoded_password" "$host4" "$HY2_PORT_START" "$cert_pin" "$HY2_SNI" "$HY2_PORT_START" "$HY2_PORT_END"
     printf '# 旧客户端兜底：不支持 pinSHA256 时才使用，抗中间人攻击能力较弱\n'
-    printf 'hysteria2://%s@%s:%s/?insecure=1&sni=%s#HY2-Legacy-Compatible\n' "$encoded_password" "$host4" "$HY2_PORT_START" "$HY2_SNI"
+    printf 'hysteria2://%s@%s:%s/?insecure=1&sni=%s#RN-CHI-HY2-Legacy-No-Pin\n' "$encoded_password" "$host4" "$HY2_PORT_START" "$HY2_SNI"
     if [[ -n "$ipv6" ]]; then
       host6="[$ipv6]"
       printf '\n# IPv6 单端口 + 证书指纹\n'
